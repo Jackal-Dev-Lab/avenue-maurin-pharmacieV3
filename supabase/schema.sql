@@ -227,6 +227,98 @@ CREATE TRIGGER update_promotions_updated_at
     EXECUTE FUNCTION update_updated_at_column();
 
 -- =====================================================
+-- TABLE: user_profiles
+-- Profils utilisateurs (extension de auth.users)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS public.user_profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    first_name VARCHAR(255),
+    last_name VARCHAR(255),
+    phone VARCHAR(50),
+    address JSONB DEFAULT '{}',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+);
+
+CREATE TRIGGER update_user_profiles_updated_at
+    BEFORE UPDATE ON user_profiles
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- =====================================================
+-- TABLE: ordonnances
+-- Ordonnances envoyées par les clients
+-- =====================================================
+CREATE TABLE IF NOT EXISTS public.ordonnances (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    patient_name VARCHAR(255) NOT NULL,
+    patient_email VARCHAR(255) NOT NULL,
+    patient_phone VARCHAR(50) NOT NULL,
+    doctor_name VARCHAR(255),
+    notes TEXT,
+    image_urls TEXT[] DEFAULT '{}',
+    status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'ready', 'completed', 'cancelled')),
+    pickup_date TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+);
+
+CREATE TRIGGER update_ordonnances_updated_at
+    BEFORE UPDATE ON ordonnances
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE INDEX idx_ordonnances_user_id ON ordonnances(user_id);
+CREATE INDEX idx_ordonnances_status ON ordonnances(status);
+
+-- =====================================================
+-- TABLE: orders
+-- Commandes Click & Collect
+-- =====================================================
+CREATE TABLE IF NOT EXISTS public.orders (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    order_number VARCHAR(50) UNIQUE NOT NULL,
+    customer_name VARCHAR(255) NOT NULL,
+    customer_email VARCHAR(255) NOT NULL,
+    customer_phone VARCHAR(50) NOT NULL,
+    items JSONB NOT NULL DEFAULT '[]',
+    subtotal DECIMAL(10, 2) NOT NULL,
+    total DECIMAL(10, 2) NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled')),
+    pickup_time VARCHAR(50),
+    notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+);
+
+CREATE TRIGGER update_orders_updated_at
+    BEFORE UPDATE ON orders
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE INDEX idx_orders_user_id ON orders(user_id);
+CREATE INDEX idx_orders_status ON orders(status);
+CREATE INDEX idx_orders_order_number ON orders(order_number);
+
+-- Fonction pour générer un numéro de commande
+CREATE OR REPLACE FUNCTION generate_order_number()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.order_number := 'PM-' || TO_CHAR(NOW(), 'YYYYMMDD') || '-' || LPAD(FLOOR(RANDOM() * 10000)::TEXT, 4, '0');
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_order_number
+    BEFORE INSERT ON orders
+    FOR EACH ROW
+    WHEN (NEW.order_number IS NULL)
+    EXECUTE FUNCTION generate_order_number();
+
+-- =====================================================
 -- DONNÉES INITIALES
 -- =====================================================
 
@@ -344,6 +436,24 @@ CREATE POLICY "Allow public read access" ON pages FOR SELECT USING (true);
 CREATE POLICY "Allow public read access" ON faq_items FOR SELECT USING (true);
 CREATE POLICY "Allow public read access" ON brands FOR SELECT USING (true);
 CREATE POLICY "Allow public read access" ON promotions FOR SELECT USING (true);
+
+-- Politiques pour user_profiles
+ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view own profile" ON user_profiles FOR SELECT USING (auth.uid() = id);
+CREATE POLICY "Users can update own profile" ON user_profiles FOR UPDATE USING (auth.uid() = id);
+CREATE POLICY "Users can insert own profile" ON user_profiles FOR INSERT WITH CHECK (auth.uid() = id);
+
+-- Politiques pour ordonnances
+ALTER TABLE ordonnances ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view own ordonnances" ON ordonnances FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can create ordonnances" ON ordonnances FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can update own ordonnances" ON ordonnances FOR UPDATE USING (auth.uid() = user_id);
+
+-- Politiques pour orders
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view own orders" ON orders FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can create orders" ON orders FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can update own orders" ON orders FOR UPDATE USING (auth.uid() = user_id);
 
 -- Note: Pour l'administration, vous pouvez créer des politiques supplémentaires
 -- basées sur l'authentification Supabase (auth.uid()) pour permettre les modifications
